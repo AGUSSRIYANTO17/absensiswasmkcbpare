@@ -5,8 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Absensi Online Wali Kelas</title>
   <!-- Tempel URL deployment Google Apps Script yang berakhiran /exec pada content di bawah ini. -->
-  <meta name="apps-script-api-url" content="https://script.google.com/macros/s/AKfycbwmC0c3SLbi3nIozmdrWfZW-j3B6XqJVrsZ161C7WngRCvx4G7FwxSJruUwSf1HzdYPlA/exec">
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <meta name="apps-script-api-url" content="https://script.google.com/macros/s/AKfycbxE0cYKj6V1tumZoJWpvFY2hoBPJeDNB4I-p1NHDfJsYoxjdKvsB9Ecgwf8ZaMPfZCHMA/exec">
   <style>
     :root {
       --primary: #194d8f;
@@ -514,7 +513,10 @@
       currentWeek: '',
       currentMonth: '',
       viewData: null,
-      reportData: null
+      reportData: null,
+      initialDashboard: null,
+      initialDashboardExpires: 0,
+      apiCache: new Map()
     };
 
     const STATUS_NAMES = { H: 'Hadir', I: 'Izin', S: 'Sakit', A: 'Alpa' };
@@ -523,7 +525,19 @@
     // Tidak ada lagi tombol Atur Backend dan tidak memakai localStorage untuk URL backend.
     const API_MESSAGE_SOURCE = 'absensi-gas-api';
     const API_TIMEOUT_MS = 60000;
+    const XLSX_LIBRARY_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    const API_CACHE_TTL = {
+      dashboard: 20000,
+      'classes.list': 30000,
+      'users.list': 15000,
+      'students.list': 20000,
+      'attendance.get': 10000,
+      'settings.get': 30000,
+      'profile.get': 30000
+    };
     const pendingApiRequests = new Map();
+    let xlsxLoadPromise = null;
+    let backendCheckTimer = null;
 
     window.addEventListener('message', handleApiMessage);
 
@@ -559,17 +573,33 @@
       state.today = data.today;
       state.currentWeek = data.currentWeek;
       state.currentMonth = data.currentMonth;
+      state.initialDashboard = data.dashboard || null;
+      state.initialDashboardExpires = data.dashboard ? Date.now() + API_CACHE_TTL.dashboard : 0;
+      if (data.dashboard) cacheApiData('dashboard', {}, data.dashboard, API_CACHE_TTL.dashboard);
     }
 
-    function callServer(action, payload) {
+    function callServer(action, payload, options) {
       const apiUrl = getApiUrl();
       if (!apiUrl) {
         return Promise.reject(new Error('URL Web App belum diisi atau tidak valid. Tempel alamat deployment Apps Script yang berakhiran /exec pada meta apps-script-api-url di index.html.'));
       }
-      return callExternalApi(apiUrl, {
+
+      const requestPayload = payload || {};
+      const settings = options || {};
+      const ttl = API_CACHE_TTL[action] || 0;
+      const cacheKey = apiCacheKey(action, requestPayload);
+      if (ttl && !settings.force) {
+        const cached = state.apiCache.get(cacheKey);
+        if (cached && cached.data && cached.expires > Date.now()) {
+          return Promise.resolve(cached.data);
+        }
+        if (cached && cached.promise) return cached.promise;
+      }
+
+      const requestPromise = callExternalApi(apiUrl, {
         action: action,
         token: state.token,
-        payload: payload || {}
+        payload: requestPayload
       }).then(function (response) {
         if (!response || response.ok !== true) {
           const message = response && response.message ? response.message : 'Respons server tidak valid.';
@@ -579,8 +609,40 @@
           }
           throw new Error(message);
         }
-        return response.data || {};
+
+        const data = response.data || {};
+        if (ttl) {
+          cacheApiData(action, requestPayload, data, ttl);
+        } else if (!['ping', 'login', 'logout', 'bootstrap'].includes(action)) {
+          clearApiCache();
+        }
+        return data;
+      }).catch(function (error) {
+        if (ttl) state.apiCache.delete(cacheKey);
+        throw error;
       });
+
+      if (ttl) {
+        state.apiCache.set(cacheKey, { promise: requestPromise, expires: Date.now() + ttl });
+      }
+      return requestPromise;
+    }
+
+    function apiCacheKey(action, payload) {
+      return action + '|' + JSON.stringify(payload || {});
+    }
+
+    function cacheApiData(action, payload, data, ttl) {
+      state.apiCache.set(apiCacheKey(action, payload), {
+        data: data,
+        expires: Date.now() + (ttl || API_CACHE_TTL[action] || 0)
+      });
+    }
+
+    function clearApiCache() {
+      state.apiCache.clear();
+      state.initialDashboard = null;
+      state.initialDashboardExpires = 0;
     }
 
     function getApiUrl() {
@@ -731,6 +793,12 @@
       state.token = '';
       state.user = null;
       state.viewData = null;
+      state.reportData = null;
+      clearApiCache();
+      if (backendCheckTimer) {
+        window.clearTimeout(backendCheckTimer);
+        backendCheckTimer = null;
+      }
     }
 
     function renderLogin() {
@@ -760,10 +828,17 @@
           </section>
         </main>`;
 
-      testBackendConnection();
+      backendCheckTimer = window.setTimeout(function () {
+        backendCheckTimer = null;
+        testBackendConnection();
+      }, 1200);
 
       document.getElementById('loginForm').addEventListener('submit', async function (event) {
         event.preventDefault();
+        if (backendCheckTimer) {
+          window.clearTimeout(backendCheckTimer);
+          backendCheckTimer = null;
+        }
         const form = new FormData(event.currentTarget);
         try {
           setLoading(true, 'Memproses login...');
@@ -773,10 +848,13 @@
           });
           state.token = data.token;
           localStorage.setItem('absensi_gas_token', state.token);
-          state.user = data.user;
-          state.settings = data.settings || {};
-          const boot = await callServer('bootstrap', {});
-          applyBootstrap(boot);
+          if (data.bootstrap) {
+            applyBootstrap(data.bootstrap);
+          } else {
+            state.user = data.user;
+            state.settings = data.settings || {};
+            applyBootstrap(await callServer('bootstrap', {}));
+          }
           renderShell();
           location.hash = '#dashboard';
           await renderRoute();
@@ -872,7 +950,12 @@
     function page() { return document.getElementById('page'); }
 
     async function renderDashboard() {
-      const data = await callServer('dashboard', {});
+      const initialData = state.initialDashboard && state.initialDashboardExpires > Date.now()
+        ? state.initialDashboard
+        : null;
+      state.initialDashboard = null;
+      state.initialDashboardExpires = 0;
+      const data = initialData || await callServer('dashboard', {});
       state.viewData = data;
       const classesHtml = data.classes.length ? data.classes.map(classCardHtml).join('') : emptyHtml('Belum ada kelas yang dapat dikelola.');
       page().innerHTML = `
@@ -1218,8 +1301,21 @@
           date: state.viewData.date,
           records: records
         });
+
+        const byStudent = {};
+        records.forEach(function (record) { byStudent[record.studentId] = record; });
+        state.viewData.students.forEach(function (student) {
+          const record = byStudent[student.id];
+          if (!record || !record.status) return;
+          student.status = record.status;
+          student.note = record.note || '';
+        });
+        cacheApiData('attendance.get', {
+          class_id: state.viewData.classRow.id,
+          date: state.viewData.date
+        }, state.viewData, API_CACHE_TTL['attendance.get']);
+
         toast(result.message, 'success');
-        await renderAttendance(state.viewData.classRow.id, state.viewData.date);
       } catch (error) { toast(error.message, 'error'); }
       finally { setLoading(false); }
     }
@@ -1577,8 +1673,29 @@
       return result;
     }
 
+    function ensureXlsxLoaded() {
+      if (window.XLSX) return Promise.resolve(window.XLSX);
+      if (xlsxLoadPromise) return xlsxLoadPromise;
+
+      xlsxLoadPromise = new Promise(function (resolve, reject) {
+        const script = document.createElement('script');
+        script.src = XLSX_LIBRARY_URL;
+        script.async = true;
+        script.onload = function () {
+          if (window.XLSX) resolve(window.XLSX);
+          else reject(new Error('Library Excel gagal diinisialisasi.'));
+        };
+        script.onerror = function () {
+          xlsxLoadPromise = null;
+          reject(new Error('Library Excel gagal dimuat. Periksa koneksi internet lalu coba lagi.'));
+        };
+        document.head.appendChild(script);
+      });
+      return xlsxLoadPromise;
+    }
+
     async function parseTableFile(file) {
-      if (!window.XLSX) throw new Error('Library pembaca Excel belum termuat. Muat ulang halaman lalu coba kembali.');
+      await ensureXlsxLoaded();
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array' });
       if (!workbook.SheetNames.length) throw new Error('File tidak memiliki lembar data.');
@@ -1628,10 +1745,10 @@
       return { rows: rows, filename: filename, sheetName: sheetName };
     }
 
-    function downloadCurrentReport(format) {
+    async function downloadCurrentReport(format) {
       const report = buildCurrentReportExport();
       if (!report) return;
-      if (format === 'xlsx') downloadExcel(report.rows, report.filename + '.xlsx', report.sheetName);
+      if (format === 'xlsx') await downloadExcel(report.rows, report.filename + '.xlsx', report.sheetName);
       else downloadCsv(report.rows, report.filename + '.csv');
     }
 
@@ -1654,26 +1771,33 @@
       };
     }
 
-    function downloadAllReport(type, format) {
+    async function downloadAllReport(type, format) {
       const report = buildAllReportExport(type);
-      if (format === 'xlsx') downloadExcel(report.rows, report.filename + '.xlsx', report.sheetName);
+      if (format === 'xlsx') await downloadExcel(report.rows, report.filename + '.xlsx', report.sheetName);
       else downloadCsv(report.rows, report.filename + '.csv');
     }
 
-    function downloadExcel(rows, filename, sheetName) {
-      if (!window.XLSX) { toast('Library Excel belum termuat. Muat ulang halaman lalu coba kembali.', 'error'); return; }
-      const worksheet = XLSX.utils.aoa_to_sheet(rows);
-      const columnCount = rows.reduce(function (max, row) { return Math.max(max, row.length); }, 0);
-      worksheet['!cols'] = Array.from({ length: columnCount }, function (_, index) {
-        const maxLength = rows.reduce(function (max, row) {
-          const value = row[index] === undefined || row[index] === null ? '' : String(row[index]);
-          return Math.max(max, value.length);
-        }, index === 1 ? 18 : 10);
-        return { wch: Math.min(Math.max(maxLength + 2, 10), 32) };
-      });
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, String(sheetName || 'Laporan').slice(0, 31));
-      XLSX.writeFile(workbook, filename);
+    async function downloadExcel(rows, filename, sheetName) {
+      try {
+        setLoading(true, 'Menyiapkan file Excel...');
+        await ensureXlsxLoaded();
+        const worksheet = XLSX.utils.aoa_to_sheet(rows);
+        const columnCount = rows.reduce(function (max, row) { return Math.max(max, row.length); }, 0);
+        worksheet['!cols'] = Array.from({ length: columnCount }, function (_, index) {
+          const maxLength = rows.reduce(function (max, row) {
+            const value = row[index] === undefined || row[index] === null ? '' : String(row[index]);
+            return Math.max(max, value.length);
+          }, index === 1 ? 18 : 10);
+          return { wch: Math.min(Math.max(maxLength + 2, 10), 32) };
+        });
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, String(sheetName || 'Laporan').slice(0, 31));
+        XLSX.writeFile(workbook, filename);
+      } catch (error) {
+        toast(error.message || 'File Excel gagal dibuat.', 'error');
+      } finally {
+        setLoading(false);
+      }
     }
 
     function downloadCsv(rows, filename) {
