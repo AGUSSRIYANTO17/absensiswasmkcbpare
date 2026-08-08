@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Absensi Online Wali Kelas</title>
   <!-- Tempel URL deployment Google Apps Script yang berakhiran /exec pada content di bawah ini. -->
-  <meta name="apps-script-api-url" content="https://script.google.com/macros/s/AKfycbxseq6YvolW_RLmrCnRcXbgnZZNIU-eOlQyFJV4WGqXVm2Dvhs4i5PEM3wqUlXbJ7jNPQ/exec">
+  <meta name="apps-script-api-url" content="https://script.google.com/macros/s/AKfycbxE0cYKj6V1tumZoJWpvFY2hoBPJeDNB4I-p1NHDfJsYoxjdKvsB9Ecgwf8ZaMPfZCHMA/exec">
   <style>
     :root {
       --primary: #194d8f;
@@ -232,6 +232,7 @@
     .col-4 { grid-column: span 4; }
     .col-3 { grid-column: span 3; }
     .col-2 { grid-column: span 2; }
+    .col-1 { grid-column: span 1; }
     .form-group { display: flex; flex-direction: column; gap: 6px; }
     .form-label { font-weight: 700; font-size: .88rem; color: #334155; }
     .form-control, .form-select {
@@ -267,6 +268,22 @@
     .nowrap { white-space: nowrap; }
     .muted { color: var(--muted); }
     .fw-bold { font-weight: 800; }
+
+    .all-recap-filter-card { overflow: visible; }
+    .all-recap-show { display:flex; align-items:flex-end; }
+    .all-recap-show .btn { width:100%; min-height:42px; white-space:nowrap; }
+    .all-recap-head { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; flex-wrap:wrap; }
+    .all-recap-scroll { max-width:100%; }
+    .all-recap-table { min-width:max-content; }
+    .all-recap-table th, .all-recap-table td { padding:10px 11px; }
+    .all-recap-table th:nth-child(1), .all-recap-table td:nth-child(1) { width:54px; }
+    .all-recap-table th:nth-child(2), .all-recap-table td:nth-child(2) { min-width:135px; }
+    .all-recap-table th:nth-child(3), .all-recap-table td:nth-child(3) { min-width:190px; }
+    .all-recap-day { min-width:72px; line-height:1.25; }
+    .all-recap-day small { color:#64748b; font-size:.72rem; }
+    .all-recap-number { min-width:64px; }
+    .all-recap-total td { background:#eaf2fb; border-top:1px solid #cbd5e1; }
+    .all-recap-percent { color:#16a34a; white-space:nowrap; }
 
     .badge {
       display: inline-flex;
@@ -474,7 +491,7 @@
       .page-actions .btn { flex: 1; }
       .grid-5, .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
       .summary-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
-      .col-8, .col-6, .col-4, .col-3, .col-2 { grid-column: span 12; }
+      .col-8, .col-6, .col-4, .col-3, .col-2, .col-1 { grid-column: span 12; }
       .user-chip { display: none; }
       .status-options { min-width: 270px; }
       .status-label { min-width: 58px; padding-inline: 6px; }
@@ -1416,123 +1433,178 @@
     }
 
     async function renderAllReports(params) {
-      const week = params.week || state.currentWeek;
-      const month = params.month || state.currentMonth;
       const dateFrom = params.dateFrom || state.currentMonth + '-01';
       const dateTo = params.dateTo || state.today;
+      const selectedClassId = params.classId || '';
       const data = await callServer('report.all', {
-        week: week,
-        month: month,
         date_from: dateFrom,
         date_to: dateTo
       });
       state.viewData = data;
+      state.allReportFilters = {
+        dateFrom: data.range.start,
+        dateTo: data.range.end,
+        classId: selectedClassId
+      };
+
+      const recap = buildAllClassesMatrix(data.range, selectedClassId);
+      const classOptionsHtml = data.range.rows.data.map(function (row) {
+        return `<option value="${escapeAttr(row.id)}" ${row.id === selectedClassId ? 'selected' : ''}>${escapeHtml(row.name)}</option>`;
+      }).join('');
+
       page().innerHTML = `
-        ${pageHeader('Rekap Semua Kelas', 'Ringkasan kehadiran seluruh kelas yang dapat diakses.', '<button class="btn btn-secondary" data-route="reports">Laporan Per Kelas</button>')}
-        <section class="callout callout-success"><strong>Rekap gabungan</strong><div class="muted">Gunakan rentang tanggal untuk menampilkan rekap seluruh kelas, lalu ekspor data ke Excel atau CSV bila diperlukan.</div></section>
-        <section class="card" style="margin-top:18px">
+        ${pageHeader('Rekap Semua Kelas', 'Kehadiran setiap hari untuk masing-masing kelas dalam satu tabel.', '<button class="btn btn-secondary" data-route="reports">Laporan Per Kelas</button>')}
+        <section class="card all-recap-filter-card">
           <div class="card-body">
-            <form class="form-grid all-report-filter" data-type="range">
-              <div class="form-group col-6"><label class="form-label">Dari tanggal</label><input class="form-control" type="date" name="dateFrom" value="${data.range.start}" required></div>
-              <div class="form-group col-6"><label class="form-label">Sampai tanggal</label><input class="form-control" type="date" name="dateTo" value="${data.range.end}" required></div>
-              <div class="col-12" style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
-                <button class="btn btn-primary" type="submit">Tampilkan Rekap</button>
-              </div>
+            <form id="allReportFilter" class="form-grid all-report-filter" data-type="recap">
+              <div class="form-group col-4"><label class="form-label">Tanggal Mulai</label><input class="form-control" type="date" name="dateFrom" value="${data.range.start}" required></div>
+              <div class="form-group col-4"><label class="form-label">Tanggal Selesai</label><input class="form-control" type="date" name="dateTo" value="${data.range.end}" required></div>
+              <div class="form-group col-3"><label class="form-label">Kelas</label><select class="form-select" name="classId"><option value="">Semua Kelas</option>${classOptionsHtml}</select></div>
+              <div class="col-1 all-recap-show"><button class="btn btn-success" type="submit">▾ Tampilkan</button></div>
             </form>
           </div>
         </section>
-        <section class="grid grid-2" style="margin-top:18px;align-items:start">
-          ${allReportCard('Mingguan', data.week, 'week')}
-          ${allReportCard('Bulanan ' + data.month.monthName, data.month, 'month')}
-          ${allRangeReportCard(data.range)}
-          ${allDailyReportCard(data.range)}
+
+        <section class="card table-card all-recap-card" style="margin-top:18px">
+          <div class="card-body all-recap-head">
+            <div>
+              <h2 class="card-title">Rekap Kehadiran Semua Kelas</h2>
+              <p class="card-subtitle">${formatDate(data.range.start)} s.d. ${formatDate(data.range.end)}${selectedClassId ? ' • ' + escapeHtml((data.range.rows.data.find(function (row) { return row.id === selectedClassId; }) || {}).name || '') : ' • Semua Kelas'}</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-success" type="button" data-action="download-all-excel" data-type="recap">Ekspor Excel</button>
+            </div>
+          </div>
+          ${allClassesRecapTableHtml(recap)}
         </section>`;
     }
 
-    function allReportRowsHtml(summary) {
-      return summary.data.map(function (row, index) {
-        return `<tr><td>${index + 1}</td><td><strong>${escapeHtml(row.name)}</strong><div class="muted">${escapeHtml(row.teacher_name || '-')}</div></td><td class="text-center">${row.student_count}</td><td class="text-center">${row.H}</td><td class="text-center">${row.I}</td><td class="text-center">${row.S}</td><td class="text-center">${row.A}</td></tr>`;
+    function dateRangeClient(start, end) {
+      const result = [];
+      if (!start || !end) return result;
+      const current = new Date(start + 'T12:00:00');
+      const last = new Date(end + 'T12:00:00');
+      while (current.getTime() <= last.getTime()) {
+        const y = current.getFullYear();
+        const m = String(current.getMonth() + 1).padStart(2, '0');
+        const d = String(current.getDate()).padStart(2, '0');
+        result.push(y + '-' + m + '-' + d);
+        current.setDate(current.getDate() + 1);
+      }
+      return result;
+    }
+
+    function shortDate(value) {
+      const parts = String(value || '').split('-');
+      return parts.length === 3 ? parts[2] + '/' + parts[1] : value;
+    }
+
+    function buildAllClassesMatrix(period, selectedClassId) {
+      const dates = dateRangeClient(period.start, period.end);
+      const allClasses = (period.rows && period.rows.data) ? period.rows.data : [];
+      const classes = selectedClassId
+        ? allClasses.filter(function (row) { return row.id === selectedClassId; })
+        : allClasses.slice();
+      const allowed = new Set(classes.map(function (row) { return row.id; }));
+      const dailyRows = ((period.daily && period.daily.data) || []).filter(function (row) {
+        return allowed.has(row.class_id);
+      });
+      const dailyMap = {};
+      const dayNames = {};
+      dailyRows.forEach(function (row) {
+        dailyMap[row.class_id + '|' + row.date] = row;
+        if (!dayNames[row.date]) dayNames[row.date] = row.day_name;
+      });
+
+      const dayNamesFallback = ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
+      dates.forEach(function (dateText) {
+        if (!dayNames[dateText]) dayNames[dateText] = dayNamesFallback[new Date(dateText + 'T12:00:00').getDay()];
+      });
+
+      const rows = classes.map(function (classRow) {
+        const dayValues = [];
+        const counts = { H: 0, I: 0, S: 0, A: 0, recorded: 0 };
+        dates.forEach(function (dateText) {
+          const day = dailyMap[classRow.id + '|' + dateText] || { H: 0, I: 0, S: 0, A: 0, recorded: 0, unrecorded: Number(classRow.student_count || 0) };
+          dayValues.push(day);
+          counts.H += Number(day.H || 0);
+          counts.I += Number(day.I || 0);
+          counts.S += Number(day.S || 0);
+          counts.A += Number(day.A || 0);
+          counts.recorded += Number(day.recorded || 0);
+        });
+        const denominator = counts.H + counts.I + counts.S + counts.A;
+        return {
+          id: classRow.id,
+          name: classRow.name,
+          teacher_name: classRow.teacher_name || '-',
+          student_count: Number(classRow.student_count || 0),
+          days: dayValues,
+          H: counts.H,
+          I: counts.I,
+          S: counts.S,
+          A: counts.A,
+          recorded: counts.recorded,
+          percentage: denominator > 0 ? (counts.H / denominator) * 100 : null
+        };
+      });
+
+      const dayTotals = dates.map(function (dateText, dayIndex) {
+        return rows.reduce(function (acc, row) {
+          const day = row.days[dayIndex];
+          acc.H += Number(day.H || 0);
+          acc.recorded += Number(day.recorded || 0);
+          return acc;
+        }, { H: 0, recorded: 0 });
+      });
+      const totals = rows.reduce(function (acc, row) {
+        acc.H += row.H;
+        acc.I += row.I;
+        acc.S += row.S;
+        acc.A += row.A;
+        return acc;
+      }, { H: 0, I: 0, S: 0, A: 0 });
+      const denominator = totals.H + totals.I + totals.S + totals.A;
+      totals.percentage = denominator > 0 ? (totals.H / denominator) * 100 : null;
+
+      return { start: period.start, end: period.end, dates: dates, dayNames: dayNames, rows: rows, dayTotals: dayTotals, totals: totals };
+    }
+
+    function percentageText(value) {
+      return value === null || value === undefined ? '-' : Number(value).toFixed(2) + '%';
+    }
+
+    function allClassesRecapTableHtml(recap) {
+      const dateHeaders = recap.dates.map(function (dateText) {
+        return `<th class="text-center all-recap-day"><span>${escapeHtml(recap.dayNames[dateText] || '')}</span><br><small>${shortDate(dateText)}</small></th>`;
       }).join('');
-    }
-
-    function allReportTableHtml(summary) {
-      const rows = allReportRowsHtml(summary);
-      return `<div class="table-scroll"><table><thead><tr><th>No.</th><th>Kelas</th><th>Siswa</th><th>H</th><th>I</th><th>S</th><th>A</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="text-center muted">Belum ada kelas.</td></tr>'}<tr><td></td><td class="fw-bold">TOTAL</td><td class="fw-bold text-center">${summary.totals.students}</td><td class="fw-bold text-center">${summary.totals.H}</td><td class="fw-bold text-center">${summary.totals.I}</td><td class="fw-bold text-center">${summary.totals.S}</td><td class="fw-bold text-center">${summary.totals.A}</td></tr></tbody></table></div>`;
-    }
-
-    function allReportCard(title, period, type) {
-      return `<article class="card table-card">
-        <div class="card-body">
-          <h2 class="card-title">${escapeHtml(title)}</h2><p class="card-subtitle">${formatDate(period.start)} s.d. ${formatDate(period.end)}</p>
-          <form class="inline-form all-report-filter" data-type="${type}" style="margin-top:14px">
-            <div class="form-group"><label class="form-label">Pilih ${type === 'week' ? 'minggu' : 'bulan'}</label><input class="form-control" type="${type}" name="value" value="${period.value}"></div>
-            <button class="btn btn-primary" type="submit">Terapkan</button>
-            <button class="btn btn-outline-success" type="button" data-action="download-all-csv" data-type="${type}">CSV</button>
-            <button class="btn btn-success" type="button" data-action="download-all-excel" data-type="${type}">Excel</button>
-          </form>
-        </div>
-        ${allReportTableHtml(period.rows)}
-      </article>`;
-    }
-
-    function allRangeReportCard(period) {
-      return `<article class="card table-card" style="grid-column:1 / -1">
-        <div class="card-body">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
-            <div><h2 class="card-title">Rentang Tanggal Semua Kelas</h2><p class="card-subtitle">${formatDate(period.start)} s.d. ${formatDate(period.end)}</p></div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <button class="btn btn-outline-success" type="button" data-action="download-all-csv" data-type="range">CSV</button>
-              <button class="btn btn-success" type="button" data-action="download-all-excel" data-type="range">Excel</button>
-            </div>
-          </div>
-        </div>
-        ${allReportTableHtml(period.rows)}
-      </article>`;
-    }
-
-    function allDailyReportCard(period) {
-      const daily = period.daily || { data: [], totals: { H: 0, I: 0, S: 0, A: 0, recorded: 0, unrecorded: 0 } };
-      const rows = daily.data.map(function (row, index) {
-        const dateCell = index === 0 || daily.data[index - 1].date !== row.date
-          ? `<strong>${formatDate(row.date)}</strong><div class="muted">${escapeHtml(row.day_name)}</div>`
-          : '';
-        const unrecorded = row.unrecorded > 0
-          ? `<span class="badge badge-empty">${row.unrecorded}</span>`
-          : '<span class="muted">0</span>';
+      const rows = recap.rows.map(function (row, index) {
+        const dayCells = row.days.map(function (day) {
+          return `<td class="text-center all-recap-number">${Number(day.recorded || 0) > 0 ? Number(day.H || 0) : '<span class="muted">-</span>'}</td>`;
+        }).join('');
         return `<tr>
-          <td class="nowrap">${dateCell}</td>
-          <td><strong>${escapeHtml(row.class_name)}</strong><div class="muted">${escapeHtml(row.teacher_name || '-')}</div></td>
-          <td class="text-center">${row.student_count}</td>
-          <td class="text-center">${row.H}</td>
+          <td class="text-center">${index + 1}</td>
+          <td class="nowrap"><strong>${escapeHtml(row.name)}</strong></td>
+          <td class="nowrap">${escapeHtml(row.teacher_name)}</td>
+          ${dayCells}
+          <td class="text-center fw-bold">${row.H}</td>
           <td class="text-center">${row.I}</td>
           <td class="text-center">${row.S}</td>
           <td class="text-center">${row.A}</td>
-          <td class="text-center">${unrecorded}</td>
-          <td class="text-center fw-bold">${row.recorded}</td>
+          <td class="text-center fw-bold all-recap-percent">${percentageText(row.percentage)}</td>
         </tr>`;
       }).join('');
+      const totalDayCells = recap.dayTotals.map(function (day) {
+        return `<td class="text-center fw-bold">${day.recorded > 0 ? day.H : '<span class="muted">-</span>'}</td>`;
+      }).join('');
+      const totalLabel = recap.rows.length === 1 ? 'Total Kelas (1 Kelas)' : 'Total Seluruh Kelas (' + recap.rows.length + ' Kelas)';
 
-      return `<article class="card table-card" style="grid-column:1 / -1">
-        <div class="card-body">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
-            <div>
-              <h2 class="card-title">Kehadiran Harian per Kelas</h2>
-              <p class="card-subtitle">Menampilkan status H/I/S/A setiap hari untuk masing-masing kelas pada ${formatDate(period.start)} s.d. ${formatDate(period.end)}.</p>
-            </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <button class="btn btn-outline-success" type="button" data-action="download-all-csv" data-type="daily">CSV Harian</button>
-              <button class="btn btn-success" type="button" data-action="download-all-excel" data-type="daily">Excel Harian</button>
-            </div>
-          </div>
-          <div class="callout" style="margin-top:14px"><strong>Belum Diisi</strong><div class="muted">Jumlah siswa yang belum memiliki status absensi pada tanggal tersebut.</div></div>
-        </div>
-        <div class="table-scroll"><table>
-          <thead><tr><th>Tanggal</th><th>Kelas / Wali Kelas</th><th>Siswa</th><th>H</th><th>I</th><th>S</th><th>A</th><th>Belum Diisi</th><th>Tercatat</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="9" class="text-center muted">Belum ada data kelas pada rentang tanggal ini.</td></tr>'}
-            <tr><td></td><td class="fw-bold">TOTAL CATATAN</td><td></td><td class="fw-bold text-center">${daily.totals.H}</td><td class="fw-bold text-center">${daily.totals.I}</td><td class="fw-bold text-center">${daily.totals.S}</td><td class="fw-bold text-center">${daily.totals.A}</td><td class="fw-bold text-center">${daily.totals.unrecorded}</td><td class="fw-bold text-center">${daily.totals.recorded}</td></tr>
-          </tbody>
-        </table></div>
-      </article>`;
+      return `<div class="table-scroll all-recap-scroll"><table class="all-recap-table">
+        <thead><tr><th class="text-center">No</th><th>Kelas</th><th>Wali Kelas</th>${dateHeaders}<th class="text-center">H</th><th class="text-center">I</th><th class="text-center">S</th><th class="text-center">A</th><th class="text-center">%</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="${8 + recap.dates.length}" class="text-center muted">Belum ada kelas pada filter tersebut.</td></tr>`}
+          ${recap.rows.length ? `<tr class="all-recap-total"><td colspan="3" class="fw-bold">${escapeHtml(totalLabel)}</td>${totalDayCells}<td class="text-center fw-bold">${recap.totals.H}</td><td class="text-center fw-bold">${recap.totals.I}</td><td class="text-center fw-bold">${recap.totals.S}</td><td class="text-center fw-bold">${recap.totals.A}</td><td class="text-center fw-bold all-recap-percent">${percentageText(recap.totals.percentage)}</td></tr>` : ''}
+        </tbody>
+      </table></div>`;
     }
 
     async function renderHistory(params) {
@@ -1807,64 +1879,106 @@
     }
 
     function buildAllReportExport(type) {
-      const period = type === 'week' ? state.viewData.week : (type === 'month' ? state.viewData.month : state.viewData.range);
+      if (!state.viewData || !state.viewData.range) return null;
+      const filters = state.allReportFilters || { classId: '' };
+      const period = state.viewData.range;
+      const recap = buildAllClassesMatrix(period, filters.classId || '');
+      const selectedClass = filters.classId
+        ? ((period.rows.data || []).find(function (row) { return row.id === filters.classId; }) || {}).name || 'Kelas terpilih'
+        : 'Semua Kelas';
 
-      if (type === 'daily') {
-        const daily = period.daily || { data: [], totals: { H: 0, I: 0, S: 0, A: 0, recorded: 0, unrecorded: 0 } };
-        const rows = [
-          ['REKAP KEHADIRAN HARIAN SEMUA KELAS'],
-          ['Periode', formatDate(period.start) + ' s.d. ' + formatDate(period.end)],
-          [],
-          ['No.','Tanggal','Hari','Kelas','Wali Kelas','Jumlah Siswa','Hadir','Izin','Sakit','Alpa','Belum Diisi','Total Tercatat']
-        ];
-        daily.data.forEach(function (row, index) {
-          rows.push([index + 1,formatDate(row.date),row.day_name,row.class_name,row.teacher_name || '-',row.student_count,row.H,row.I,row.S,row.A,row.unrecorded,row.recorded]);
+      const headers = ['No.','Kelas','Wali Kelas'].concat(recap.dates.map(function (dateText) {
+        return (recap.dayNames[dateText] || '') + ' ' + shortDate(dateText);
+      })).concat(['H','I','S','A','%']);
+      const rows = [
+        ['REKAP KEHADIRAN SEMUA KELAS'],
+        ['Periode', formatDate(recap.start) + ' s.d. ' + formatDate(recap.end)],
+        ['Filter Kelas', selectedClass],
+        [],
+        headers
+      ];
+
+      recap.rows.forEach(function (row, index) {
+        const daily = row.days.map(function (day) {
+          return Number(day.recorded || 0) > 0 ? Number(day.H || 0) : '-';
         });
+        rows.push([index + 1, row.name, row.teacher_name].concat(daily).concat([
+          row.H, row.I, row.S, row.A, row.percentage === null ? '' : row.percentage / 100
+        ]));
+      });
+
+      if (recap.rows.length) {
+        const dayTotals = recap.dayTotals.map(function (day) {
+          return day.recorded > 0 ? day.H : '-';
+        });
+        const label = recap.rows.length === 1 ? 'TOTAL KELAS' : 'TOTAL SELURUH KELAS (' + recap.rows.length + ' KELAS)';
         rows.push([]);
-        rows.push(['','','','TOTAL CATATAN','','',daily.totals.H,daily.totals.I,daily.totals.S,daily.totals.A,daily.totals.unrecorded,daily.totals.recorded]);
-        return {
-          rows: rows,
-          filename: 'rekap_harian_semua_kelas_' + period.start + '_sd_' + period.end,
-          sheetName: 'Harian Semua Kelas'
-        };
+        rows.push(['', label, ''].concat(dayTotals).concat([
+          recap.totals.H,
+          recap.totals.I,
+          recap.totals.S,
+          recap.totals.A,
+          recap.totals.percentage === null ? '' : recap.totals.percentage / 100
+        ]));
       }
 
-      const summary = period.rows;
-      const reportTitle = type === 'week'
-        ? 'REKAP ABSENSI MINGGUAN SEMUA KELAS'
-        : (type === 'month' ? 'REKAP ABSENSI BULANAN SEMUA KELAS' : 'REKAP ABSENSI RENTANG TANGGAL SEMUA KELAS');
-      const rows = [[reportTitle],['Periode', formatDate(period.start) + ' s.d. ' + formatDate(period.end)],[],['No.','Kelas','Wali Kelas','Jumlah Siswa','Hadir','Izin','Sakit','Alpa','Total Tercatat']];
-      summary.data.forEach(function (row, index) {
-        rows.push([index + 1,row.name,row.teacher_name || '-',row.student_count,row.H,row.I,row.S,row.A,row.recorded]);
-      });
-      rows.push([]); rows.push(['','TOTAL SEMUA KELAS','',summary.totals.students,summary.totals.H,summary.totals.I,summary.totals.S,summary.totals.A,summary.totals.recorded]);
-      const filenameSuffix = type === 'range' ? period.start + '_sd_' + period.end : period.value;
       return {
         rows: rows,
-        filename: 'rekap_semua_kelas_' + type + '_' + filenameSuffix,
-        sheetName: type === 'week' ? 'Semua Kelas Mingguan' : (type === 'month' ? 'Semua Kelas Bulanan' : 'Rentang Semua Kelas')
+        filename: 'rekap_semua_kelas_' + recap.start + '_sd_' + recap.end + (filters.classId ? '_' + safeFilename(selectedClass) : ''),
+        sheetName: 'Rekap Semua Kelas',
+        excelOptions: {
+          widths: [6, 18, 28].concat(recap.dates.map(function () { return 12; })).concat([8, 8, 8, 8, 11]),
+          mergeTitle: true,
+          headerRow: 5,
+          filterEndRow: 5 + recap.rows.length,
+          percentColumn: 8 + recap.dates.length
+        }
       };
     }
 
     async function downloadAllReport(type, format) {
       const report = buildAllReportExport(type);
-      if (format === 'xlsx') await downloadExcel(report.rows, report.filename + '.xlsx', report.sheetName);
+      if (!report) return;
+      if (format === 'xlsx') await downloadExcel(report.rows, report.filename + '.xlsx', report.sheetName, report.excelOptions);
       else downloadCsv(report.rows, report.filename + '.csv');
     }
 
-    async function downloadExcel(rows, filename, sheetName) {
+    async function downloadExcel(rows, filename, sheetName, options) {
       try {
         setLoading(true, 'Menyiapkan file Excel...');
         await ensureXlsxLoaded();
+        options = options || {};
         const worksheet = XLSX.utils.aoa_to_sheet(rows);
         const columnCount = rows.reduce(function (max, row) { return Math.max(max, row.length); }, 0);
-        worksheet['!cols'] = Array.from({ length: columnCount }, function (_, index) {
-          const maxLength = rows.reduce(function (max, row) {
-            const value = row[index] === undefined || row[index] === null ? '' : String(row[index]);
-            return Math.max(max, value.length);
-          }, index === 1 ? 18 : 10);
-          return { wch: Math.min(Math.max(maxLength + 2, 10), 32) };
-        });
+        worksheet['!cols'] = options.widths
+          ? options.widths.map(function (width) { return { wch: width }; })
+          : Array.from({ length: columnCount }, function (_, index) {
+              const maxLength = rows.reduce(function (max, row) {
+                const value = row[index] === undefined || row[index] === null ? '' : String(row[index]);
+                return Math.max(max, value.length);
+              }, index === 1 ? 18 : 10);
+              return { wch: Math.min(Math.max(maxLength + 2, 10), 32) };
+            });
+
+        if (options.mergeTitle && columnCount > 1) {
+          worksheet['!merges'] = worksheet['!merges'] || [];
+          worksheet['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: columnCount - 1 } });
+        }
+        if (options.headerRow && rows.length >= options.headerRow) {
+          const headerIndex = options.headerRow - 1;
+          const lastDataRow = options.filterEndRow ? Math.max(headerIndex, options.filterEndRow - 1) : Math.max(headerIndex, rows.length - 1);
+          worksheet['!autofilter'] = {
+            ref: XLSX.utils.encode_range({ s: { r: headerIndex, c: 0 }, e: { r: lastDataRow, c: columnCount - 1 } })
+          };
+        }
+        if (options.percentColumn) {
+          const percentColIndex = options.percentColumn - 1;
+          for (let rowIndex = (options.headerRow || 1); rowIndex < rows.length; rowIndex += 1) {
+            const ref = XLSX.utils.encode_cell({ r: rowIndex, c: percentColIndex });
+            if (worksheet[ref] && typeof worksheet[ref].v === 'number') worksheet[ref].z = '0.00%';
+          }
+        }
+
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, String(sheetName || 'Laporan').slice(0, 31));
         XLSX.writeFile(workbook, filename);
@@ -1893,25 +2007,13 @@
       const form = event.target.closest('.all-report-filter');
       if (!form) return;
       event.preventDefault();
-      const type = form.dataset.type;
       const formData = new FormData(form);
-      const params = {
-        week: state.viewData.week.value,
-        month: state.viewData.month.value,
-        dateFrom: state.viewData.range.start,
-        dateTo: state.viewData.range.end
-      };
-      if (type === 'range') {
-        const dateFrom = formData.get('dateFrom');
-        const dateTo = formData.get('dateTo');
-        if (!dateFrom || !dateTo) { toast('Isi tanggal mulai dan tanggal selesai.', 'error'); return; }
-        if (dateFrom > dateTo) { toast('Tanggal mulai tidak boleh melewati tanggal selesai.', 'error'); return; }
-        params.dateFrom = dateFrom;
-        params.dateTo = dateTo;
-      } else {
-        params[type] = formData.get('value');
-      }
-      navigate('all-reports', params);
+      const dateFrom = formData.get('dateFrom');
+      const dateTo = formData.get('dateTo');
+      const classId = formData.get('classId') || '';
+      if (!dateFrom || !dateTo) { toast('Isi tanggal mulai dan tanggal selesai.', 'error'); return; }
+      if (dateFrom > dateTo) { toast('Tanggal mulai tidak boleh melewati tanggal selesai.', 'error'); return; }
+      navigate('all-reports', { dateFrom: dateFrom, dateTo: dateTo, classId: classId });
     });
 
     function formatDate(value) {
