@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Absensi Online Wali Kelas</title>
   <!-- Tempel URL deployment Google Apps Script yang berakhiran /exec pada content di bawah ini. -->
-  <meta name="apps-script-api-url" content="https://script.google.com/macros/s/AKfycbxRRRGLKmHMVjXsNQqAADejgtU9QUZGsyTRQtHm8qBOrwQWJ2mzjHeqfC625P_cQzIguQ/exec">
+  <meta name="apps-script-api-url" content="https://script.google.com/macros/s/AKfycbxE0cYKj6V1tumZoJWpvFY2hoBPJeDNB4I-p1NHDfJsYoxjdKvsB9Ecgwf8ZaMPfZCHMA/exec">
   <style>
     :root {
       --primary: #194d8f;
@@ -1276,7 +1276,8 @@
       page().innerHTML = `
         ${pageHeader('Absensi ' + data.classRow.name, 'Tahun Pelajaran ' + data.classRow.academic_year, `
           <button class="btn btn-outline-success" data-route="reports" data-class-id="${data.classRow.id}">Lihat Rekap</button>
-          <button class="btn btn-secondary" data-route="students" data-class-id="${data.classRow.id}">Data Siswa</button>`)}
+          <button class="btn btn-secondary" data-route="students" data-class-id="${data.classRow.id}">Data Siswa</button>
+          ${state.user.role === 'admin' && data.recorded_count > 0 ? `<button class="btn btn-outline-danger" data-action="delete-attendance-day" data-class-id="${data.classRow.id}" data-date="${data.date}">Hapus Absensi Tanggal Ini</button>` : ''}`)}
         <section class="card"><div class="card-body">
           <form id="attendanceFilter" class="inline-form">
             <div class="form-group"><label class="form-label">Tanggal absensi</label><input class="form-control" type="date" name="date" value="${data.date}" required></div>
@@ -1333,6 +1334,43 @@
         }, state.viewData, API_CACHE_TTL['attendance.get']);
 
         toast(result.message, 'success');
+      } catch (error) { toast(error.message, 'error'); }
+      finally { setLoading(false); }
+    }
+
+    async function deleteAttendanceDay(classId, date) {
+      if (state.user.role !== 'admin') return;
+      const className = state.viewData && state.viewData.classRow ? state.viewData.classRow.name : 'kelas ini';
+      if (!confirm('Hapus SELURUH absensi ' + className + ' tanggal ' + formatDate(date) + '?\n\nTindakan ini tidak dapat dibatalkan.')) return;
+      try {
+        setLoading(true, 'Menghapus absensi kelas...');
+        const result = await callServer('attendance.deleteDay', { class_id: classId, date: date });
+        toast(result.message, 'success');
+        await renderAttendance(classId, date);
+      } catch (error) { toast(error.message, 'error'); }
+      finally { setLoading(false); }
+    }
+
+    async function deleteAttendanceRecord(studentId, date) {
+      if (state.user.role !== 'admin') return;
+      const currentRows = state.viewData && state.viewData.rows ? state.viewData.rows : [];
+      const row = currentRows.find(function (item) {
+        return item.student_id === studentId && item.attendance_date === date;
+      });
+      const label = row ? row.student_name + ' (' + row.class_name + ')' : 'siswa ini';
+      if (!confirm('Hapus absensi ' + label + ' tanggal ' + formatDate(date) + '?\n\nHanya input siswa ini yang akan dihapus.')) return;
+
+      const filters = state.viewData && state.viewData.filters ? state.viewData.filters : {};
+      try {
+        setLoading(true, 'Menghapus input absensi...');
+        const result = await callServer('attendance.deleteRecord', { student_id: studentId, date: date });
+        toast(result.message, 'success');
+        await renderHistory({
+          classId: filters.class_id || '',
+          dateFrom: filters.date_from || '',
+          dateTo: filters.date_to || '',
+          status: filters.status || ''
+        });
       } catch (error) { toast(error.message, 'error'); }
       finally { setLoading(false); }
     }
@@ -1617,7 +1655,10 @@
       const data = await callServer('history', payload);
       state.viewData = data;
       const rows = data.rows.map(function (row) {
-        return `<tr><td class="nowrap">${formatDate(row.attendance_date)}</td><td>${escapeHtml(row.class_name)}</td><td>${escapeHtml(row.nis)}</td><td><strong>${escapeHtml(row.student_name)}</strong></td><td>${statusBadge(row.status)}</td><td>${escapeHtml(row.note || '-')}</td><td>${escapeHtml(row.recorder_name || '-')}</td></tr>`;
+        const adminAction = state.user.role === 'admin'
+          ? `<td><button class="btn btn-sm btn-outline-danger" data-action="delete-attendance-record" data-student-id="${escapeAttr(row.student_id)}" data-date="${escapeAttr(row.attendance_date)}">Hapus</button></td>`
+          : '';
+        return `<tr><td class="nowrap">${formatDate(row.attendance_date)}</td><td>${escapeHtml(row.class_name)}</td><td>${escapeHtml(row.nis)}</td><td><strong>${escapeHtml(row.student_name)}</strong></td><td>${statusBadge(row.status)}</td><td>${escapeHtml(row.note || '-')}</td><td>${escapeHtml(row.recorder_name || '-')}</td>${adminAction}</tr>`;
       }).join('');
       page().innerHTML = `
         ${pageHeader('Riwayat Absensi', 'Telusuri data berdasarkan kelas, tanggal, dan status.')}
@@ -1633,7 +1674,7 @@
         <section class="grid grid-4 summary-grid" style="margin-top:18px">
           ${summaryCard('Hadir', data.summary.H, 'status-h')}${summaryCard('Izin', data.summary.I, 'status-i')}${summaryCard('Sakit', data.summary.S, 'status-s')}${summaryCard('Alpa', data.summary.A, 'status-a')}
         </section>
-        <section class="card table-card" style="margin-top:18px"><div class="table-scroll"><table><thead><tr><th>Tanggal</th><th>Kelas</th><th>NIS</th><th>Nama</th><th>Status</th><th>Catatan</th><th>Dicatat Oleh</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="text-center muted">Tidak ada data pada filter tersebut.</td></tr>'}</tbody></table></div></section>`;
+        <section class="card table-card" style="margin-top:18px"><div class="table-scroll"><table><thead><tr><th>Tanggal</th><th>Kelas</th><th>NIS</th><th>Nama</th><th>Status</th><th>Catatan</th><th>Dicatat Oleh</th>${state.user.role === 'admin' ? '<th>Aksi</th>' : ''}</tr></thead><tbody>${rows || `<tr><td colspan="${state.user.role === 'admin' ? 8 : 7}" class="text-center muted">Tidak ada data pada filter tersebut.</td></tr>`}</tbody></table></div></section>`;
       document.getElementById('historyFilter').addEventListener('submit', function (event) {
         event.preventDefault();
         navigate('history', formObject(event.currentTarget));
@@ -1725,6 +1766,8 @@
         case 'import-students': importStudents(); break;
         case 'download-student-template': downloadCsv([['NIS','Nama'],['1006','Fajar Ramadhan']], 'template_import_siswa.csv'); break;
         case 'mark-all-present': document.querySelectorAll('.status-options input[value="H"]').forEach(function (input) { input.checked = true; }); break;
+        case 'delete-attendance-day': deleteAttendanceDay(actionEl.dataset.classId, actionEl.dataset.date); break;
+        case 'delete-attendance-record': deleteAttendanceRecord(actionEl.dataset.studentId, actionEl.dataset.date); break;
         case 'load-weekly-report': loadWeeklyReport(); break;
         case 'load-monthly-report': loadMonthlyReport(); break;
         case 'load-range-report': loadRangeReport(); break;
