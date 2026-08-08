@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Absensi Online Wali Kelas</title>
   <!-- Tempel URL deployment Google Apps Script yang berakhiran /exec pada content di bawah ini. -->
-  <meta name="apps-script-api-url" content="https://script.google.com/macros/s/AKfycbzXuanKVwdf8Xp4JyALSYxIRgMsbGZkhxhcQhGCdB61y7Z0lAc2VXCJ_5ebYW7jR33WHA/exec">
+  <meta name="apps-script-api-url" content="https://script.google.com/macros/s/AKfycbxE0cYKj6V1tumZoJWpvFY2hoBPJeDNB4I-p1NHDfJsYoxjdKvsB9Ecgwf8ZaMPfZCHMA/exec">
   <style>
     :root {
       --primary: #194d8f;
@@ -1445,6 +1445,7 @@
           ${allReportCard('Mingguan', data.week, 'week')}
           ${allReportCard('Bulanan ' + data.month.monthName, data.month, 'month')}
           ${allRangeReportCard(data.range)}
+          ${allDailyReportCard(data.range)}
         </section>`;
     }
 
@@ -1486,6 +1487,51 @@
           </div>
         </div>
         ${allReportTableHtml(period.rows)}
+      </article>`;
+    }
+
+    function allDailyReportCard(period) {
+      const daily = period.daily || { data: [], totals: { H: 0, I: 0, S: 0, A: 0, recorded: 0, unrecorded: 0 } };
+      const rows = daily.data.map(function (row, index) {
+        const dateCell = index === 0 || daily.data[index - 1].date !== row.date
+          ? `<strong>${formatDate(row.date)}</strong><div class="muted">${escapeHtml(row.day_name)}</div>`
+          : '';
+        const unrecorded = row.unrecorded > 0
+          ? `<span class="badge badge-empty">${row.unrecorded}</span>`
+          : '<span class="muted">0</span>';
+        return `<tr>
+          <td class="nowrap">${dateCell}</td>
+          <td><strong>${escapeHtml(row.class_name)}</strong><div class="muted">${escapeHtml(row.teacher_name || '-')}</div></td>
+          <td class="text-center">${row.student_count}</td>
+          <td class="text-center">${row.H}</td>
+          <td class="text-center">${row.I}</td>
+          <td class="text-center">${row.S}</td>
+          <td class="text-center">${row.A}</td>
+          <td class="text-center">${unrecorded}</td>
+          <td class="text-center fw-bold">${row.recorded}</td>
+        </tr>`;
+      }).join('');
+
+      return `<article class="card table-card" style="grid-column:1 / -1">
+        <div class="card-body">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div>
+              <h2 class="card-title">Kehadiran Harian per Kelas</h2>
+              <p class="card-subtitle">Menampilkan status H/I/S/A setiap hari untuk masing-masing kelas pada ${formatDate(period.start)} s.d. ${formatDate(period.end)}.</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-outline-success" type="button" data-action="download-all-csv" data-type="daily">CSV Harian</button>
+              <button class="btn btn-success" type="button" data-action="download-all-excel" data-type="daily">Excel Harian</button>
+            </div>
+          </div>
+          <div class="callout" style="margin-top:14px"><strong>Belum Diisi</strong><div class="muted">Jumlah siswa yang belum memiliki status absensi pada tanggal tersebut.</div></div>
+        </div>
+        <div class="table-scroll"><table>
+          <thead><tr><th>Tanggal</th><th>Kelas / Wali Kelas</th><th>Siswa</th><th>H</th><th>I</th><th>S</th><th>A</th><th>Belum Diisi</th><th>Tercatat</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="9" class="text-center muted">Belum ada data kelas pada rentang tanggal ini.</td></tr>'}
+            <tr><td></td><td class="fw-bold">TOTAL CATATAN</td><td></td><td class="fw-bold text-center">${daily.totals.H}</td><td class="fw-bold text-center">${daily.totals.I}</td><td class="fw-bold text-center">${daily.totals.S}</td><td class="fw-bold text-center">${daily.totals.A}</td><td class="fw-bold text-center">${daily.totals.unrecorded}</td><td class="fw-bold text-center">${daily.totals.recorded}</td></tr>
+          </tbody>
+        </table></div>
       </article>`;
     }
 
@@ -1762,6 +1808,27 @@
 
     function buildAllReportExport(type) {
       const period = type === 'week' ? state.viewData.week : (type === 'month' ? state.viewData.month : state.viewData.range);
+
+      if (type === 'daily') {
+        const daily = period.daily || { data: [], totals: { H: 0, I: 0, S: 0, A: 0, recorded: 0, unrecorded: 0 } };
+        const rows = [
+          ['REKAP KEHADIRAN HARIAN SEMUA KELAS'],
+          ['Periode', formatDate(period.start) + ' s.d. ' + formatDate(period.end)],
+          [],
+          ['No.','Tanggal','Hari','Kelas','Wali Kelas','Jumlah Siswa','Hadir','Izin','Sakit','Alpa','Belum Diisi','Total Tercatat']
+        ];
+        daily.data.forEach(function (row, index) {
+          rows.push([index + 1,formatDate(row.date),row.day_name,row.class_name,row.teacher_name || '-',row.student_count,row.H,row.I,row.S,row.A,row.unrecorded,row.recorded]);
+        });
+        rows.push([]);
+        rows.push(['','','','TOTAL CATATAN','','',daily.totals.H,daily.totals.I,daily.totals.S,daily.totals.A,daily.totals.unrecorded,daily.totals.recorded]);
+        return {
+          rows: rows,
+          filename: 'rekap_harian_semua_kelas_' + period.start + '_sd_' + period.end,
+          sheetName: 'Harian Semua Kelas'
+        };
+      }
+
       const summary = period.rows;
       const reportTitle = type === 'week'
         ? 'REKAP ABSENSI MINGGUAN SEMUA KELAS'
