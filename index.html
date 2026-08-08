@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Absensi Online Wali Kelas</title>
   <!-- Tempel URL deployment Google Apps Script yang berakhiran /exec pada content di bawah ini. -->
-  <meta name="apps-script-api-url" content="https://script.google.com/macros/s/AKfycbwCSUyI_KFunplLFpJqhEZMtMmwWzgs0IFMj_5fcEtbQDSi-YLHiCVyKt68CjfRdVD4QQ/exec">
+  <meta name="apps-script-api-url" content="https://script.google.com/macros/s/AKfycbxE0cYKj6V1tumZoJWpvFY2hoBPJeDNB4I-p1NHDfJsYoxjdKvsB9Ecgwf8ZaMPfZCHMA/exec">
   <style>
     :root {
       --primary: #194d8f;
@@ -1429,7 +1429,18 @@
       state.viewData = data;
       page().innerHTML = `
         ${pageHeader('Rekap Semua Kelas', 'Ringkasan kehadiran seluruh kelas yang dapat diakses.', '<button class="btn btn-secondary" data-route="reports">Laporan Per Kelas</button>')}
-        <section class="callout callout-success"><strong>Rekap gabungan</strong><div class="muted">Gunakan filter minggu, bulan, atau rentang tanggal, lalu ekspor data ke Excel atau CSV bila diperlukan.</div></section>
+        <section class="callout callout-success"><strong>Rekap gabungan</strong><div class="muted">Gunakan rentang tanggal untuk menampilkan rekap seluruh kelas, lalu ekspor data ke Excel atau CSV bila diperlukan.</div></section>
+        <section class="card" style="margin-top:18px">
+          <div class="card-body">
+            <form class="form-grid all-report-filter" data-type="range">
+              <div class="form-group col-6"><label class="form-label">Dari tanggal</label><input class="form-control" type="date" name="dateFrom" value="${data.range.start}" required></div>
+              <div class="form-group col-6"><label class="form-label">Sampai tanggal</label><input class="form-control" type="date" name="dateTo" value="${data.range.end}" required></div>
+              <div class="col-12" style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-primary" type="submit">Tampilkan Rekap</button>
+              </div>
+            </form>
+          </div>
+        </section>
         <section class="grid grid-2" style="margin-top:18px;align-items:start">
           ${allReportCard('Mingguan', data.week, 'week')}
           ${allReportCard('Bulanan ' + data.month.monthName, data.month, 'month')}
@@ -1466,16 +1477,13 @@
     function allRangeReportCard(period) {
       return `<article class="card table-card" style="grid-column:1 / -1">
         <div class="card-body">
-          <h2 class="card-title">Rentang Tanggal Semua Kelas</h2><p class="card-subtitle">${formatDate(period.start)} s.d. ${formatDate(period.end)}</p>
-          <form class="form-grid all-report-filter" data-type="range" style="margin-top:14px">
-            <div class="form-group col-4"><label class="form-label">Dari tanggal</label><input class="form-control" type="date" name="dateFrom" value="${period.start}"></div>
-            <div class="form-group col-4"><label class="form-label">Sampai tanggal</label><input class="form-control" type="date" name="dateTo" value="${period.end}"></div>
-            <div class="col-4" style="display:flex;align-items:end;gap:8px;flex-wrap:wrap">
-              <button class="btn btn-primary" type="submit">Terapkan</button>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div><h2 class="card-title">Rentang Tanggal Semua Kelas</h2><p class="card-subtitle">${formatDate(period.start)} s.d. ${formatDate(period.end)}</p></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
               <button class="btn btn-outline-success" type="button" data-action="download-all-csv" data-type="range">CSV</button>
               <button class="btn btn-success" type="button" data-action="download-all-excel" data-type="range">Excel</button>
             </div>
-          </form>
+          </div>
         </div>
         ${allReportTableHtml(period.rows)}
       </article>`;
